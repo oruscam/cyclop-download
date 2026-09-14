@@ -74,26 +74,50 @@ if [ -z "$JWT" ]; then
     exit 1
 fi
 
+# Two steps, because the API addresses a build by version: list the builds to
+# learn which one is newest, then ask for that one's download URL. The URL is
+# presigned with a one-hour TTL, so it is requested second, right before use.
 echo "Fetching latest version information..."
-API_ENDPOINT="${API_URL}api/v1/firmware/new_version/"
 RESPONSE=$(curl -s -w "\n%{http_code}" \
     -H "Authorization: Bearer $JWT" \
-    "$API_ENDPOINT")
+    "${API_URL}api/v1/firmware/")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
 BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" != "200" ]; then
-    echo "Error: Failed to fetch version info (HTTP $HTTP_CODE)"
+    echo "Error: Failed to list versions (HTTP $HTTP_CODE)"
     echo "Response: $BODY"
     exit 1
 fi
 
-VERSION=$(echo "$BODY" | jq -r '.version')
-PRESIGNED_URL=$(echo "$BODY" | jq -r '.url_presign')
+VERSION=$(echo "$BODY" | jq -r 'if type == "array" then .[0].version else .version end // empty')
 
-if [ -z "$VERSION" ] || [ "$VERSION" = "null" ] || [ -z "$PRESIGNED_URL" ] || [ "$PRESIGNED_URL" = "null" ]; then
-    echo "Error: Invalid response from server"
+if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+    echo "Error: no versions returned by the server"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+echo "Requesting download URL for $VERSION..."
+RESPONSE=$(curl -s -w "\n%{http_code}" \
+    -H "Authorization: Bearer $JWT" \
+    "${API_URL}api/v1/firmware/version/?version=${VERSION}")
+
+HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+BODY=$(echo "$RESPONSE" | sed '$d')
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo "Error: Failed to fetch version $VERSION (HTTP $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+PRESIGNED_URL=$(echo "$BODY" | jq -r '.url_presign // empty')
+
+if [ -z "$PRESIGNED_URL" ] || [ "$PRESIGNED_URL" = "null" ]; then
+    echo "Error: no download URL for version $VERSION"
+    echo "Response: $BODY"
     exit 1
 fi
 
