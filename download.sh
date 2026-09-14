@@ -48,10 +48,36 @@ for cmd in curl jq tar; do
     fi
 done
 
+# The firmware routes take a JWT, so the credentials entered above are first
+# exchanged for an access token. The trailing slash on the token path matters:
+# with APPEND_SLASH Django cannot redirect a POST and answers 500 instead.
+echo "Authenticating..."
+TOKEN_RESPONSE=$(curl -s -w "\n%{http_code}" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg u "$AUTH_USER" --arg p "$AUTH_PASS" \
+          '{username: $u, password: $p}')" \
+    "${API_URL}api/token/")
+
+HTTP_CODE=$(echo "$TOKEN_RESPONSE" | tail -n1)
+BODY=$(echo "$TOKEN_RESPONSE" | sed '$d')
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo "Error: Authentication failed (HTTP $HTTP_CODE)"
+    echo "Response: $BODY"
+    exit 1
+fi
+
+JWT=$(echo "$BODY" | jq -r '.access // empty')
+if [ -z "$JWT" ]; then
+    echo "Error: the token response carried no access token"
+    exit 1
+fi
+
 echo "Fetching latest version information..."
 API_ENDPOINT="${API_URL}api/v1/firmware/new_version/"
 RESPONSE=$(curl -s -w "\n%{http_code}" \
-    -u "$AUTH_USER:$AUTH_PASS" \
+    -H "Authorization: Bearer $JWT" \
     "$API_ENDPOINT")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
